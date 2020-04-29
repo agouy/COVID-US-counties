@@ -1,0 +1,150 @@
+---
+title: "COVID-19 in the USA - Explore the data for each US county"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    theme: flatly
+    favicon: ./data/favicon.ico
+     
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(dygraphs)
+library(readxl)
+library(xts)
+library(leaflet)
+library(htmlwidgets)
+library(htmltools)
+
+load("./data/leafmap.rda")
+```
+
+
+Column 1 {data-width=200}
+--------------------------------------------
+
+
+### Deaths
+
+```{r}
+valueBox(
+  value = "1,000,000",
+  color = "warning",
+  caption = paste("people have been infected by Sars-Cov-2 in the USA")
+)
+```
+
+### Metric 2
+
+```{r}
+valueBox(
+  value = "20,000",
+  color = "danger",
+  caption = paste("people died in of COVID-19 in the USA")
+)
+```
+
+### What do you see?
+
+**Graphics description:**
+
+* The first tab contains time series: prevalence in the 100 most affected counties. You can select subsets.
+
+* Second and third tab contain maps reprensenting respectively the prevalence (cases per 100,000 people) and total cases in each US county.
+
+**Last update:**
+
+`r format(Sys.time(), '%d %B, %Y')`
+
+**Data sources:**
+
+To be determined.
+
+**Contact:**
+
+To be determined.
+
+
+Column 2 {.tabset .tabset-pills}
+--------------------------------------------
+
+### EVOLUTION OVER TIME
+
+DESCRIPTION.
+
+```{r}
+nyt.data <- read.csv(
+  "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv",
+  stringsAsFactors = FALSE
+)
+nyt.data$fips <- formatC(nyt.data$fips, width = 5, format = "d", flag = "0")
+
+last.day <- (nyt.data[nyt.data$date == max(as.Date(nyt.data$date)), ])
+last.day <- last.day[order(last.day$cases, decreasing = TRUE), ]
+fips.20 <- last.day$fips[2:21]
+fips.100 <- last.day$fips[2:50]
+
+library(crosstalk)
+library(plotly)
+# [nyt.data$fips %in% fips.20,]
+sd <- SharedData$new(nyt.data[nyt.data$fips %in% fips.100,], key = ~county)
+fig <- plot_ly(sd, x = ~(date)) 
+fig <- fig %>% add_trace(
+  y = ~cases,
+  color = ~fips,
+  name= ~county,
+  type = 'scatter',
+  mode = 'lines+markers',
+  marker = list(size = 2),
+  line = list(width = 1))  
+
+bscols(
+  list(
+    # filter_slider("mag", "Filter cases", sd, column = ~cases, step=2500, width=250),
+    filter_select("stt", "Select state name:", sd, ~state),
+    filter_select("ctw", "Select county name:", sd, ~county),
+    filter_select("fps", "Select county FIPS:", sd, ~fips)
+  ),
+ fig,
+  widths = c(3, NA)
+)
+```
+
+
+### MAP OF INFECTION RATES
+
+```{r, fig.height=5}
+popup_dat <- paste0("<strong>County: </strong>", 
+                    leafmap$NAME, 
+                    "<br><strong>Cases: </strong>", 
+                    round(leafmap$cases),
+                    "<br><strong>Cases /100k: </strong>", 
+                    round(leafmap$cases100k),
+                    "<br><strong>Deaths: </strong>", 
+                    round(leafmap$deaths),
+                    "<br><strong>Deaths /100k: </strong>", 
+                    round(leafmap$deaths100k))
+pal <- colorQuantile("YlOrRd", leafmap$cases100k, n = 10, na.color = "#fff8e8")
+
+### Render map in leaflet
+leaflet(data = leafmap) %>% addTiles() %>%
+  addPolygons(fillColor = ~pal(cases100k), 
+              fillOpacity = 0.8, 
+              color = "#BDBDC3", 
+              weight = 1,
+              popup = popup_dat)
+```
+
+### MAP OF TOTAL CASES
+
+```{r}
+### Render map in leaflet
+leaflet(data = leafmap) %>% addTiles() %>%
+  addPolygons(fillColor = ~pal(cases), 
+              fillOpacity = 0.8, 
+              color = "#BDBDC3", 
+              weight = 1,
+              popup = popup_dat)
+```
+
