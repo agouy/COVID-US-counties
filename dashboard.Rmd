@@ -25,33 +25,40 @@ Column 1 {data-width=200}
 --------------------------------------------
 
 
-### Deaths
+### Positive
 
 ```{r}
+us.data <- read.csv("https://covidtracking.com/api/v1/us/current.csv")
+
 valueBox(
-  value = "1,000,000",
+  value = us.data$positive,
   color = "warning",
   caption = paste("people have been infected by Sars-Cov-2 in the USA")
 )
 ```
 
+### Recovered
+
+```{r}
+valueBox(
+  value = us.data$recovered,
+  color = "success",
+  caption = paste("people recovered of COVID-19 in the USA")
+)
+```
+
+
 ### Metric 2
 
 ```{r}
 valueBox(
-  value = "20,000",
+  value = us.data$death,
   color = "danger",
-  caption = paste("people died in of COVID-19 in the USA")
+  caption = paste("people died of COVID-19 in the USA")
 )
 ```
 
-### What do you see?
-
-**Graphics description:**
-
-* The first tab contains time series: prevalence in the 100 most affected counties. You can select subsets.
-
-* Second and third tab contain maps reprensenting respectively the prevalence (cases per 100,000 people) and total cases in each US county.
+### About this dashboard
 
 **Last update:**
 
@@ -66,12 +73,12 @@ To be determined.
 To be determined.
 
 
-Column 2 {.tabset .tabset-pills}
+Column 2 {.tabset}
 --------------------------------------------
 
 ### EVOLUTION OVER TIME
 
-DESCRIPTION.
+This tab contains time series: prevalence in the 100 most affected counties. You can select subsets.
 
 ```{r}
 nyt.data <- read.csv(
@@ -87,17 +94,16 @@ fips.100 <- last.day$fips[2:50]
 
 library(crosstalk)
 library(plotly)
-# [nyt.data$fips %in% fips.20,]
 sd <- SharedData$new(nyt.data[nyt.data$fips %in% fips.100,], key = ~county)
-fig <- plot_ly(sd, x = ~(date)) 
+fig <- plot_ly(sd, x = ~date) 
 fig <- fig %>% add_trace(
   y = ~cases,
   color = ~fips,
   name= ~county,
   type = 'scatter',
   mode = 'lines+markers',
-  marker = list(size = 2),
-  line = list(width = 1))  
+  marker = list(size = 2.5),
+  line = list(width = 2))  
 
 bscols(
   list(
@@ -113,6 +119,8 @@ bscols(
 
 
 ### MAP OF INFECTION RATES
+
+Below is a map reprensenting the number of cases per 100,000 individuals in each US county.
 
 ```{r, fig.height=5}
 popup_dat <- paste0("<strong>County: </strong>", 
@@ -137,6 +145,9 @@ leaflet(data = leafmap) %>% addTiles() %>%
 ```
 
 ### MAP OF TOTAL CASES
+
+Below is a map reprensenting the total number of cases in each US county.
+
 
 ```{r}
 ### Render map in leaflet
