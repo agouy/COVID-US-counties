@@ -1,0 +1,420 @@
+---
+title: "COVID-19 in US counties"
+author: "Alexandre Gouy"
+date: "04/29/2020"
+output: 
+  # html_document
+  rmdformats::readthedown:
+    code_folding: hide
+    # self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+The first official case of **COVID-19** in the USA has been confirmed on the 21st of January. About three months later, almost 1 million cases have been discovered. In this context of this pandemic, it is of utmost importance to understand how the pandemic evolves by reporting data in a clear an insgihtful way.
+
+This project has **two main goals**:
+
+* **visualize different COVID-related metrics**: infection rate / 100k individuals, total cases, and total deaths at the county level (by representing maps and time series)
+
+* **identify counties with potential errors in official counts**: it has been shown that some counties negative counts in cumulative cases, which is not possible.
+
+Notes about the report: 
+
+* R code used to generate this report is provided. You just need to click on the "Code" button on the right to display the code used in a given section.
+
+* Most graphs and tables are interactive: you can zoom in and out, click on elements to display more content, or search for specific data points.
+
+# Data preparation
+
+## Dependencies and input files
+
+We first need to load R packages (mostly used for interactive visualizations).
+
+Then we set the location of input files used in this project:
+
+* a web scraped data file (april15.csv) containing COVID data for a single time-point
+
+* official population counts in US counties (census), directly taken from the web
+
+* the New-York Times COVID-19 data, taken from the web
+
+* official counties borders to be displayed on the map (downloaded from census.gov)
+
+```{r dep, results = 'hide'}
+## R packages to have installed
+library(rgdal)
+library(dplyr)
+library(leaflet)
+library(scales)
+library(dygraphs)
+library(crosstalk)
+library(plotly)
+
+## Local paths or URLs to files
+
+# web-scraped data
+CSV.input <- "./data/april15.csv"
+
+# Census data
+CENSUS.input <- "https://www2.census.gov/programs-surveys/popest/datasets/2010-2019/counties/totals/co-est2019-alldata.csv"
+
+# NYT data
+NYT.url <- "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv"
+
+# Counties and states boundaries
+# downloaded from https://www.census.gov/geographies/mapping-files/time-series/geo/carto-boundary-file.html
+# and put in a 'shp' subdirectory
+MAP.dir <- "./shp"
+MAP.prefix <- "cb_2018_us_county_20m"
+STATE.prefix <- "cb_2018_us_state_20m"
+
+## Graphical parameters
+line.wid <- 1.5
+dot.size <- 2.5
+```
+
+## Loading and cleaning the web scraped file
+
+We first load the `april15.csv` file. We keep the unique county ID (FIPS or GEOID here), the number of cases and deaths.
+
+```{r, results = 'hide'}
+### Begin data prep
+dat <- read.csv(CSV.input, header = TRUE, sep=",", stringsAsFactors = FALSE)
+
+# adding leading zeros to any FIPS code 
+# that's less than 5 digits long to get a good match
+dat <- data.frame(
+  GEOID = formatC(dat$fips, width = 5, format = "d", flag = "0"),
+  cases = dat$cases,
+  deaths = dat$deaths,
+  stringsAsFactors = FALSE
+)
+
+head(dat) # check how it looks
+```
+
+## Loading and cleaning census data
+
+Census data taken from _census.gov_ will be useful to scale the number of cases with population estimates for each county. After loading the file, we generate a table with the properly formatted unique county ID (GEOID) and the 2019 population estimate.
+
+```{r}
+### Get population data
+census <- read.csv(CENSUS.input, sep = ",", header = TRUE)
+
+# Prepare county IDs (concatenate state and county IDs)
+census$GEOID <- paste0(
+  formatC(census$STATE, width = 2, format = "d", flag = "0"),
+  formatC(census$COUNTY, width = 3, format = "d", flag = "0")
+)
+
+# we keep only the county level from this dataset (encoded as SUMLEV = 50)
+census.st <- census[census$SUMLEV == 40, ]
+census <- census[census$SUMLEV == 50, ]
+
+# we just keep the GEOID (= FIPS) and latest census estimate (2019)
+census.small <- data.frame(
+  GEOID = census$GEOID,
+  pop = census$POPESTIMATE2019
+)
+rownames(census.small) <- census.small$GEOID
+census.small.st <- data.frame(
+  GEOID = census.st$GEOID,
+  pop = census.st$POPESTIMATE2019
+)
+rownames(census.small) <- census.small$GEOID
+
+```
+
+## Getting and preparing NYT data
+
+Another dataset we're gonna look at is provided by the New-York Times. We load it as a data frame containing different variables: the date, county, state, FIPS (county ID), cases and deaths. We format the county ID just like before.
+
+```{r}
+## Load data
+nyt.data <- read.csv(
+  NYT.url,
+  stringsAsFactors = FALSE
+)
+
+# NAs are present in the dataset (no FIPS, i.e. not a county)
+# they correspond to special cases: the state level, NYC, islands
+# let's filter them out
+nyt.data.st <- nyt.data[nyt.data$county == "Unknown", ]
+
+nyt.data <- nyt.data[!is.na(nyt.data$fips), ]
+
+## Format county ID
+nyt.data$GEOID <- formatC(nyt.data$fips, width = 5, format = "d", flag = "0")
+```
+
+## Compute rate per 100k using census data for both datasets
+
+For the two COVID datasets, we have the number of cases and deaths. We can compute for each dataset two other metrics: the rate of cases per 100k inhabitants, and the rate of deaths per 100k.
+
+```{r}
+dat$pop <- census.small[dat$GEOID, ]$pop
+dat$cases100k <- 100000 * dat$cases / dat$pop
+dat$deaths100k <- 100000 * dat$deaths / dat$pop
+
+nyt.data$pop <- census.small[nyt.data$GEOID, ]$pop
+nyt.data$cases100k <- 100000 * nyt.data$cases / nyt.data$pop
+nyt.data$deaths100k <- 100000 * nyt.data$deaths / nyt.data$pop
+```
+
+
+## Preparing the base map
+
+We first load county borders and remove Alaska and islands.
+
+```{r, results = 'hide'}
+## Load the shape file
+us.map <- readOGR(dsn = MAP.dir, layer = MAP.prefix, stringsAsFactors = FALSE)
+
+## IMPORTANT preprocessing step
+
+# Remove Alaska(2), Hawaii(15), Puerto Rico (72), Guam (66), 
+# Virgin Islands (78), American Samoa (60), Mariana Islands (69), 
+# Micronesia (64), Marshall Islands (68), Palau (70), Minor Islands (74)
+us.map <- us.map[!us.map$STATEFP %in% c("02", "15", "72", "66", "78", "60", "69",
+                                        "64", "68", "70", "74"),]
+
+# Make sure other islands are removed
+us.map <- us.map[!us.map$STATEFP %in% c("81", "84", "86", "87", "89", "71", "76",
+                                        "95", "79"),]
+
+##We do the sq,e for the state layer
+us.st <- readOGR(dsn = MAP.dir, layer = STATE.prefix, stringsAsFactors = FALSE)
+us.st <- us.st[!us.st$STATEFP %in% c("02", "15", "72", "66", "78", "60", "69",
+                                        "64", "68", "70", "74"),]
+us.st <- us.st[!us.st$STATEFP %in% c("81", "84", "86", "87", "89", "71", "76",
+                                        "95", "79"),]
+
+```
+
+# Maps based on web-scraped and NYT data
+
+We want to represent our COVID data on a map of the USA. To do so, we will generate maps using the Leaflet framework. The idea is to add polygons representing counties to the basemap. Polygon coloring depends on the metric of interest (here, total cases or rate /100k). Clicking on a county gives more information about this area.
+
+```{r pressure}
+# Merge spatial df with downloade ddata.
+leafmap <- merge(us.map, dat, by=c("GEOID"))
+
+# Format popup data for leaflet map.
+popup_dat <- paste0("<strong>County: </strong>", 
+                    leafmap$NAME, 
+                    "<br><strong>Cases: </strong>", 
+                    round(leafmap$cases),
+                    "<br><strong>Cases /100k: </strong>", 
+                    round(leafmap$cases100k),
+                    "<br><strong>Deaths: </strong>", 
+                    round(leafmap$deaths),
+                    "<br><strong>Deaths /100k: </strong>", 
+                    round(leafmap$deaths100k))
+```
+
+
+##  Number of cases per 100,000 (NYT data, last day available)
+
+Finally, we can represent the rate of cases per 100,000 individuals, with NYT data this time (by first taking the most recent timepoint available in the dataset).
+
+
+```{r}
+# We first create a data frame containing data from the last day
+last.day <- (nyt.data[nyt.data$date == max(as.Date(nyt.data$date)), ])
+last.day <- last.day[order(last.day$cases, decreasing = TRUE), ]
+
+sum.per.st <- tapply(last.day$cases, last.day$state, sum)
+last.day.st <- data.frame(
+  NAME = names(sum.per.st),
+  cases = sum.per.st
+)
+
+# Merge spatial df with downloade ddata.
+leaf.nyt <- merge(us.map, last.day, by=c("GEOID"))
+leaf.nyt.st <- merge(us.st, last.day.st, by=c("NAME"))
+
+# Format popup data for leaflet map.
+popup_dat <- paste0("<strong>County: </strong>", 
+                    leaf.nyt$NAME, 
+                    "<br><strong>Cases: </strong>", 
+                    round(leaf.nyt$cases),
+                    "<br><strong>Cases /100k: </strong>", 
+                    round(leaf.nyt$cases100k),
+                    "<br><strong>Deaths: </strong>", 
+                    round(leaf.nyt$deaths),
+                    "<br><strong>Deaths /100k: </strong>", 
+                    round(leaf.nyt$deaths100k))
+
+save(leaf.nyt, leaf.nyt.st, popup_dat, file = "./data/leafnyt.rda")
+pal <- colorQuantile("YlOrRd", leaf.nyt$cases100k, n = 10, na.color = "#fff8e8")
+pal.st <- colorQuantile("YlOrRd", leaf.nyt.st$cases+runif(1000), n = 10, na.color = "#fff8e8")
+
+### Render map in leaflet
+leaflet() %>% addTiles() %>%
+  addPolygons(data = leaf.nyt,
+              fillColor = ~pal(cases), 
+              fillOpacity = 0.8, 
+              color = "#BDBDC3", 
+              weight = 1,
+              popup = popup_dat, group = "County") %>%
+  addPolygons(data = leaf.nyt.st,
+              fillColor = "white", 
+              fillOpacity = 0., 
+              color = "#BDBDC3", 
+              weight = 1,
+              popup = popup_dat, group = "County") %>%
+  addPolygons(data = leaf.nyt.st,
+              fillColor = ~pal.st(cases), 
+              fillOpacity = 0.8, 
+              color = "#BDBDC3", 
+              weight = 1, group = "State") %>%
+  # Layers control
+  addLayersControl(
+    # baseGroups = c("OSM (default)", "Toner", "Toner Lite"),
+    baseGroups = c("State", "County"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+
+```
+
+
+
+```{r}
+## get the IDs of the 50 most affected counties
+fips.50 <- last.day$GEOID[1:300]
+```
+
+
+# Evolution of COVID cases over time (New York Times data)
+
+We can now have a look at COVID data over time. To do so, we will represent COVID cases evolution for the 50 most affected counties (most affected = highest number of cases so far).
+
+## Total cases over time
+
+We can first represent the evolution of the total number of cases in the most affected counties. A subset of these 200 curves can be selected using the boxes on the left (filtering by states or counties).
+
+```{r, fig.height = 10}
+library(htmltools)
+nyt.data$time <- as.numeric(as.Date(nyt.data$date))
+nyt.data$time <- nyt.data$time - min(nyt.data$time)
+
+nyt.data$ID <- paste0(nyt.data$date,nyt.data$GEOID)
+# nyt.data <-nyt.data[sample(nrow(nyt.data)),] 
+# sd <- SharedData$new(nyt.data[nyt.data$GEOID %in% fips.50, ], key = ~county)
+sd <- SharedData$new(nyt.data[nyt.data$GEOID %in% fips.50, ], key = ~ID)
+
+set_values <- function(w, sharedData, values) {
+  script <- sprintf(
+    "HTMLWidgets.addPostRenderHandler(function() { return crosstalk.group('%s').var('%s').set(%s); })",
+    sharedData$groupName(), "filter", jsonlite::toJSON(values)
+  )
+  browsable(tagList(
+    tags$head(tags$script(script)), w
+  ))
+}
+
+s <- set_values(
+  filter_checkbox("stt", "Select state name:", sd, ~state, columns = 2),
+  sd, "California"
+)
+
+# PALETTE <- sample(colorRampPalette(RColorBrewer::brewer.pal(8,"Set2"))(20))
+# PALETTE <- rainbow(1000)
+PALETTE <- grDevices::colors()[grep('gr(a|e)y', grDevices::colors(), invert = T)]
+
+fig <- plot_ly(sd, x = ~time) %>% layout(xaxis = list(range = c(0, 100)), yaxis = list(range = c(0, 50000)))
+fig <- fig %>% add_markers(
+  y = ~cases,
+  color = ~(GEOID),
+  colors = PALETTE,
+  cauto = FALSE,
+  name= ~county,
+  marker = list(size = 4))
+  
+bscols(
+  list(
+    filter_slider("mag", "Days since beginning", sd, column = ~as.numeric(time), step=1, width=200),
+    s,
+    filter_select("ctw", "Select county name:", sd, ~county)
+  ),
+  fig,
+  widths = c(4, NA)
+)
+```
+
+# Identifying counties with unexpected patterns 
+
+It has been observed that some data might be erroneous as the cumulative number of cases sometimes go down, which is not supposed to happen. We need to identify the reasons underlying these observations. To do so, we'll first automatically identify counties reporting a negative difference in the cumulative number of cases from one day to the next one.
+
+## List of counties with negative differences
+
+The idea now is to compute the difference in case values from one day to the next one in order to identify potential negative difference (cumulative number of cases going down). We can then report the counties presenting such negative difference in a table.
+
+```{r}
+## Sort data by date 
+nyt.data.sorted <- nyt.data[order(nyt.data$date), ]
+
+## Compute, for each county, the difference in case values day after day
+diff.per.county <- tapply(nyt.data.sorted$cases, nyt.data.sorted$GEOID, diff)
+
+## Get the maximal difference (= min value)
+diff.per.county.max <- lapply(diff.per.county, min)
+
+## Create a data frame with max difference per county
+differences <- data.frame(GEOID = names(diff.per.county.max), Max.diff = unlist(diff.per.county.max), stringsAsFactors = FALSE)
+differences <- differences[order(differences$Max.diff), ]
+
+DT::datatable(differences[differences$Max.diff < 0 & differences$GEOID != "   NA", ])
+```
+
+## Time series for counties with largest discrepancies
+
+We can have a look at the time series of some counties presenting a large negative difference in cases number (> 10).
+
+```{r}
+## Get counties with a maximal negative difference of at least 10
+which.diff <- lapply(diff.per.county, function(x) any(x < (-10)))
+which.diff <- do.call(rbind, which.diff)
+names.diff <- names(which.diff[which.diff[, 1] == TRUE, ])
+
+## Get counties IDs
+fips.diff <- leafmap$GEOID[leafmap$GEOID %in% names.diff]
+
+print(paste(leafmap$NAME[leafmap$GEOID %in% names.diff], fips.diff))
+
+sd <- SharedData$new(nyt.data[nyt.data$GEOID %in% fips.diff,], key = ~county)
+fig <- plot_ly(sd, x = ~date) 
+fig <- fig %>% add_trace(
+  y = ~cases,
+  color = ~GEOID,
+  name= ~county,
+  type = 'scatter',
+  mode = 'lines+markers',
+  marker = list(size = dot.size),
+  line = list(width = line.wid))  
+
+bscols(
+  list(
+    # filter_slider("mag", "Filter cases", sd, column = ~cases, step=2500, width=250),
+    filter_select("stt", "Select state name:", sd, ~state),
+    filter_select("ctw", "Select county name:", sd, ~county),
+    filter_select("fps", "Select county FIPS:", sd, ~GEOID)
+  ),
+ fig,
+  widths = c(3, NA)
+)
+```
+
+
+
+
+

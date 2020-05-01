@@ -70,11 +70,12 @@ CENSUS.input <- "https://www2.census.gov/programs-surveys/popest/datasets/2010-2
 # NYT data
 NYT.url <- "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv"
 
-# Counties borders
+# Counties and states boundaries
 # downloaded from https://www.census.gov/geographies/mapping-files/time-series/geo/carto-boundary-file.html
 # and put in a 'shp' subdirectory
 MAP.dir <- "./shp"
 MAP.prefix <- "cb_2018_us_county_20m"
+STATE.prefix <- "cb_2018_us_state_20m"
 
 ## Graphical parameters
 line.wid <- 1.5
@@ -94,7 +95,8 @@ dat <- read.csv(CSV.input, header = TRUE, sep=",", stringsAsFactors = FALSE)
 dat <- data.frame(
   GEOID = formatC(dat$fips, width = 5, format = "d", flag = "0"),
   cases = dat$cases,
-  deaths = dat$deaths
+  deaths = dat$deaths,
+  stringsAsFactors = FALSE
 )
 
 head(dat) # check how it looks
@@ -115,6 +117,7 @@ census$GEOID <- paste0(
 )
 
 # we keep only the county level from this dataset (encoded as SUMLEV = 50)
+census.st <- census[census$SUMLEV == 40, ]
 census <- census[census$SUMLEV == 50, ]
 
 # we just keep the GEOID (= FIPS) and latest census estimate (2019)
@@ -123,6 +126,12 @@ census.small <- data.frame(
   pop = census$POPESTIMATE2019
 )
 rownames(census.small) <- census.small$GEOID
+census.small.st <- data.frame(
+  GEOID = census.st$GEOID,
+  pop = census.st$POPESTIMATE2019
+)
+rownames(census.small) <- census.small$GEOID
+
 ```
 
 ## Getting and preparing NYT data
@@ -139,6 +148,8 @@ nyt.data <- read.csv(
 # NAs are present in the dataset (no FIPS, i.e. not a county)
 # they correspond to special cases: the state level, NYC, islands
 # let's filter them out
+nyt.data.st <- nyt.data[nyt.data$county == "Unknown", ]
+
 nyt.data <- nyt.data[!is.na(nyt.data$fips), ]
 
 ## Format county ID
@@ -179,6 +190,14 @@ us.map <- us.map[!us.map$STATEFP %in% c("02", "15", "72", "66", "78", "60", "69"
 # Make sure other islands are removed
 us.map <- us.map[!us.map$STATEFP %in% c("81", "84", "86", "87", "89", "71", "76",
                                         "95", "79"),]
+
+##We do the sq,e for the state layer
+us.st <- readOGR(dsn = MAP.dir, layer = STATE.prefix, stringsAsFactors = FALSE)
+us.st <- us.st[!us.st$STATEFP %in% c("02", "15", "72", "66", "78", "60", "69",
+                                        "64", "68", "70", "74"),]
+us.st <- us.st[!us.st$STATEFP %in% c("81", "84", "86", "87", "89", "71", "76",
+                                        "95", "79"),]
+
 ```
 
 
@@ -205,9 +224,9 @@ popup_dat <- paste0("<strong>County: </strong>",
 save(leafmap, file = "./data/leafmap.rda")
 ```
 
-## Total number of cases (April 15 data)
+## Map based on (April 15 data)
 
-First, we represent the total number of cases in each county.
+First, we represent the total number of cases in each county and the rate of cases per 100,000 individuals.
 
 ```{r}
 pal <- colorQuantile("YlOrRd", leafmap$cases100k, n = 10, na.color = "#fff8e8")
@@ -218,23 +237,18 @@ leaflet(data = leafmap) %>% addTiles() %>%
               fillOpacity = 0.8, 
               color = "#BDBDC3", 
               weight = 1,
-              popup = popup_dat)
-```
-
-## Number of cases per 100,000 (April 15 data)
-
-Next, we can represent the rate of cases per 100,000 individuals.
-
-```{r}
-pal <- colorQuantile("YlOrRd", leafmap$cases100k, n = 10, na.color = "#fff8e8")
-
-### Render map in leaflet
-leaflet(data = leafmap) %>% addTiles() %>%
+              popup = popup_dat, group = "Total cases") %>%
   addPolygons(fillColor = ~pal(cases100k), 
               fillOpacity = 0.8, 
               color = "#BDBDC3", 
               weight = 1,
-              popup = popup_dat)
+              popup = popup_dat, group = "Cases /100k") %>%
+  # Layers control
+  addLayersControl(
+    # baseGroups = c("OSM (default)", "Toner", "Toner Lite"),
+    baseGroups = c("Total cases", "Cases /100k"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
 ```
 
 ##  Number of cases per 100,000 (NYT data, last day available)
@@ -247,8 +261,15 @@ Finally, we can represent the rate of cases per 100,000 individuals, with NYT da
 last.day <- (nyt.data[nyt.data$date == max(as.Date(nyt.data$date)), ])
 last.day <- last.day[order(last.day$cases, decreasing = TRUE), ]
 
+sum.per.st <- tapply(last.day$cases, last.day$state, sum)
+last.day.st <- data.frame(
+  NAME = names(sum.per.st),
+  cases = sum.per.st
+)
+
 # Merge spatial df with downloade ddata.
 leaf.nyt <- merge(us.map, last.day, by=c("GEOID"))
+leaf.nyt.st <- merge(us.st, last.day.st, by=c("NAME"))
 
 # Format popup data for leaflet map.
 popup_dat <- paste0("<strong>County: </strong>", 
@@ -264,19 +285,67 @@ popup_dat <- paste0("<strong>County: </strong>",
 
 save(leaf.nyt, file = "./data/leafnyt.rda")
 pal <- colorQuantile("YlOrRd", leaf.nyt$cases100k, n = 10, na.color = "#fff8e8")
+pal.st <- colorQuantile("YlOrRd", leaf.nyt.st$cases+runif(1000), n = 10, na.color = "#fff8e8")
 
 ### Render map in leaflet
-leaflet(data = leaf.nyt) %>% addTiles() %>%
-  addPolygons(fillColor = ~pal(cases100k), 
+leaflet() %>% addTiles() %>%
+  addPolygons(data = leaf.nyt,
+              fillColor = ~pal(cases), 
               fillOpacity = 0.8, 
               color = "#BDBDC3", 
               weight = 1,
-              popup = popup_dat)
+              popup = popup_dat, group = "County") %>%
+  addPolygons(data = leaf.nyt.st,
+              fillColor = "white", 
+              fillOpacity = 0., 
+              color = "#BDBDC3", 
+              weight = 1,
+              popup = popup_dat, group = "County") %>%
+  addPolygons(data = leaf.nyt.st,
+              fillColor = ~pal.st(cases), 
+              fillOpacity = 0.8, 
+              color = "#BDBDC3", 
+              weight = 1, group = "State") %>%
+  # Layers control
+  addLayersControl(
+    # baseGroups = c("OSM (default)", "Toner", "Toner Lite"),
+    baseGroups = c("State", "County"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+
 ```
 
+### Map with states
 ```{r}
-## get the IDs of the 50 most affected states
-fips.50 <- last.day$GEOID[1:50]
+# We first create a data frame containing data from the last day
+# last.day <- (nyt.data.st[nyt.data.st$date == max(as.Date(nyt.data.st$date)), ])
+# last.day <- last.day[order(last.day$cases, decreasing = TRUE), ]
+# 
+# # Merge spatial df with downloade ddata.
+# last.day$NAME <- last.day$state
+# leaf.nyt.st <- merge(us.st, last.day, by=c("NAME"))
+
+# Format popup data for leaflet map.
+# popup_dat <- paste0("<strong>County: </strong>", 
+#                     leaf.nyt$NAME, 
+#                     "<br><strong>Cases: </strong>", 
+#                     round(leaf.nyt$cases),
+#                     "<br><strong>Cases /100k: </strong>", 
+#                     round(leaf.nyt$cases100k),
+#                     "<br><strong>Deaths: </strong>", 
+#                     round(leaf.nyt$deaths),
+#                     "<br><strong>Deaths /100k: </strong>", 
+#                     round(leaf.nyt$deaths100k))
+# 
+# save(leaf.nyt, file = "./data/leafnyt.rda")
+
+```
+
+
+
+```{r}
+## get the IDs of the 50 most affected counties
+fips.50 <- last.day$GEOID[1:200]
 ```
 
 
@@ -286,9 +355,12 @@ We can now have a look at COVID data over time. To do so, we will represent COVI
 
 ## Total cases over time
 
-We can first represent the evolution of the total number of cases in the most affected counties. A subset of these 50 curves can be selected using the boxes on the left (filtering by states or counties).
+We can first represent the evolution of the total number of cases in the most affected counties. A subset of these 200 curves can be selected using the boxes on the left (filtering by states or counties).
 
 ```{r, fig.height = 10}
+library(htmltools)
+nyt.data$time <- as.numeric(as.Date(nyt.data$date))
+nyt.data$time <- nyt.data$time - min(nyt.data$time)
 sd <- SharedData$new(nyt.data[nyt.data$GEOID %in% fips.50, ], key = ~county)
 fig <- plot_ly(sd, x = ~date) 
 fig <- fig %>% add_trace(
@@ -300,45 +372,54 @@ fig <- fig %>% add_trace(
   marker = list(size = dot.size),
   line = list(width = line.wid))  
 
+
+set_values <- function(w, sharedData, values) {
+  script <- sprintf(
+    "HTMLWidgets.addPostRenderHandler(function() { return crosstalk.group('%s').var('%s').set(%s); })",
+    sharedData$groupName(), "filter", jsonlite::toJSON(values)
+  )
+  # TODO: attach htmlwidgets dependency to w?
+  browsable(tagList(
+    tags$head(tags$script(script)), w
+  ))
+}
+
+s <- set_values(
+  filter_checkbox("stt", "Select state name:", sd, ~state),
+  sd, "Arizona"
+)
+
 bscols(
   list(
-    # filter_slider("mag", "Filter cases", sd, column = ~cases, step=2500, width=250),
-    filter_select("stt", "Select state name:", sd, ~state),
+    # filter_slider("mag", "Time", sd, column = ~as.numeric(time), step=1, width=200),
+    s,
+    # filter_checkbox("stt", "Select state name:", sd, ~state),
     filter_select("ctw", "Select county name:", sd, ~county),
     filter_select("fps", "Select county FIPS:", sd, ~GEOID)
   ),
  fig,
   widths = c(3, NA)
 )
-```
 
-## Rate of infection over time
 
-We can now represent the evolution of prevalence in these counties.
-
-```{r, fig.height = 10}
-sd <- SharedData$new(nyt.data[nyt.data$GEOID %in% fips.50, ], key = ~county)
-fig <- plot_ly(sd, x = ~date) 
-fig <- fig %>% add_trace(
-  y = ~cases100k,
-  color = ~GEOID,
-  name= ~county,
-  type = 'scatter',
-  mode = 'lines+markers',
-  marker = list(size = dot.size),
-  line = list(width = line.wid))  
-
+library(d3scatter)
+  d3scatter(shared_mtcars, ~wt, ~mpg, ~factor(cyl), width="100%", height=250),
+  d3scatter(shared_mtcars, ~hp, ~qsec, ~factor(cyl), width="100%", height=250)
+  
 bscols(
   list(
-    # filter_slider("mag", "Filter cases", sd, column = ~cases, step=2500, width=250),
-    filter_select("stt", "Select state name:", sd, ~state),
+    filter_slider("mag", "Time", sd, column = ~as.numeric(time), step=1, width=200),
+    s,
+    # filter_checkbox("stt", "Select state name:", sd, ~state),
     filter_select("ctw", "Select county name:", sd, ~county),
     filter_select("fps", "Select county FIPS:", sd, ~GEOID)
   ),
- fig,
+ d3scatter(sd, ~time, ~cases, color = ~GEOID),
   widths = c(3, NA)
 )
 ```
+
+
 
 # Identifying counties with unexpected patterns 
 

@@ -1,0 +1,196 @@
+---
+title: "Explore COVID-19 data in the USA"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    theme: flatly
+    favicon: ./data/favicon.ico
+     
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(dygraphs)
+library(readxl)
+library(xts)
+library(leaflet)
+library(htmlwidgets)
+library(htmltools)
+library(crosstalk)
+library(plotly)
+
+load("./data/leafnyt.rda")
+```
+
+
+Summary and map
+========
+
+Column 1 {data-width=150}
+--------------------------------------------
+
+
+### Positive
+
+```{r}
+us.data <- read.csv("https://covidtracking.com/api/v1/us/current.csv")
+
+valueBox(
+  value = us.data$positive,
+  color = "warning",
+  caption = paste("people have been infected by Sars-Cov-2 in the USA")
+)
+```
+
+### Recovered
+
+```{r}
+valueBox(
+  value = us.data$recovered,
+  color = "success",
+  caption = paste("people recovered of COVID-19 in the USA")
+)
+```
+
+
+### Metric 2
+
+```{r}
+valueBox(
+  value = us.data$death,
+  color = "danger",
+  caption = paste("people died of COVID-19 in the USA")
+)
+```
+
+### About this dashboard
+
+**Last update:**
+
+`r format(Sys.time(), '%d %B, %Y')`
+
+**Data sources:**
+
+To be determined.
+
+**Contact:**
+
+To be determined.
+
+
+Column 2
+--------------------------------------------
+
+### Map
+
+Below is a map representing the number of cases per 100,000 individuals in each US state and county.
+
+```{r child = './rmd/map.Rmd'}
+```
+
+
+Evolution in most affected counties
+========
+
+### EVOLUTION OVER TIME
+
+This tab contains time series: prevalence in the 100 most affected counties. You can select subsets.
+
+```{r}
+nyt.data <- read.csv(
+  "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv",
+  stringsAsFactors = FALSE
+)
+nyt.data$fips <- formatC(nyt.data$fips, width = 5, format = "d", flag = "0")
+nyt.data$time <- as.numeric(as.Date(nyt.data$date))
+nyt.data$time <- nyt.data$time - min(nyt.data$time)
+
+last.day <- (nyt.data[nyt.data$date == max(as.Date(nyt.data$date)), ])
+last.day <- last.day[order(last.day$cases, decreasing = TRUE), ]
+
+fips.100 <- last.day$fips[2:20]
+
+
+nyt.data$ID <- paste0(nyt.data$date, nyt.data$fips)
+subs <- nyt.data[nyt.data$fips %in% fips.100, ]
+sd <- SharedData$new(subs, key = ~ID)
+
+set_values <- function(w, sharedData, values) {
+  script <- sprintf(
+    "HTMLWidgets.addPostRenderHandler(function() { return crosstalk.group('%s').var('%s').set(%s); })",
+    sharedData$groupName(), "filter", jsonlite::toJSON(values)
+  )
+  browsable(tagList(
+    tags$head(tags$script(script)), w
+  ))
+}
+
+s <- set_values(
+  filter_checkbox("stt", "Select state:", sd, ~state, columns = 2),
+  sd, 1:4
+)
+
+PALETTE <- grDevices::colors()[grep('gr(a|e)y', grDevices::colors(), invert = T)]
+
+fig <- plot_ly(sd, x = ~time) %>% 
+  layout(
+    xaxis = list(range = c(0, 100)),
+    yaxis = list(range = c(0, 40000)),
+    height = 500
+  )
+fig <- fig %>% add_markers(
+  y = ~cases,
+  color = ~(county),
+  colors = PALETTE,
+  name= ~county,
+  marker = list(size = 4))  %>% config(displayModeBar = F)
+  
+toWebGL(bscols(
+  list(
+    filter_slider("mag", "Days since beginning", sd, column = ~as.numeric(time), step=1, width=200),
+    s,
+    filter_select("ctw", "Select county name:", sd, ~county)
+  ),
+  partial_bundle(fig),
+  widths = c(4, NA)
+))
+```
+
+```{r}
+# grDevices::colors()[grep('gr(a|e)y', grDevices::colors(), invert = T)]
+
+plotState <- function(data.to.plot, sta) {
+
+  datu <- data.to.plot[data.to.plot$state == sta, c("county", "date", "cases")]
+  PALETTE <-  sample(colorRampPalette(RColorBrewer::brewer.pal(8, "Set1"))(length(unique(datu$county))))
+   
+  ggp <- ggplot() + geom_line(data=datu, aes(x=date, y=cases, colour=county, group=county))+
+    scale_color_manual(values = PALETTE) + 
+    theme_classic() + 
+    theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
+  
+  fg <- ggplotly(ggp)  %>% config(displayModeBar = F) %>% 
+    layout(xaxis=list(fixedrange=TRUE)) %>%
+    layout(yaxis=list(fixedrange=TRUE))
+
+  (partial_bundle(fg))
+}  
+
+st.list <- sort(unique(nyt.data$state))
+fileConn <- file("per-state.Rmd")
+writeLines((paste0("### ", st.list, "\n\n", "```{r ", st.list,"}\nplotState(nyt.data, \'", st.list, "\')\n```\n\n")), fileConn)
+close(fileConn)
+```
+
+
+Data per county
+========
+
+Column 1 {.tabset}
+-------
+
+```{r child = 'per-state.Rmd'}
+```
+
+
+

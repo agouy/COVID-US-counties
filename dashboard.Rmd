@@ -120,7 +120,7 @@ bscols(
 
 ### MAP OF INFECTION RATES
 
-Below is a map reprensenting the number of cases per 100,000 individuals in each US county.
+Below is a map representing the number of cases per 100,000 individuals in each US county.
 
 ```{r, fig.height=5}
 popup_dat <- paste0("<strong>County: </strong>", 
@@ -146,7 +146,7 @@ leaflet(data = leafmap) %>% addTiles() %>%
 
 ### MAP OF TOTAL CASES
 
-Below is a map reprensenting the total number of cases in each US county.
+Below is a map representing the total number of cases in each US county.
 
 
 ```{r}

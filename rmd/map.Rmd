@@ -1,0 +1,58 @@
+```{r, fig.height=5}
+pal <- colorNumeric("YlOrRd", log(leaf.nyt$cases+1), na.color = "#fff8e8")
+pal.st <- colorNumeric("YlOrRd", log(leaf.nyt.st$cases+1), na.color = "#fff8e8")
+
+popup_dat_st <- paste0("<strong>State: </strong>", 
+                       leaf.nyt.st$NAME, 
+                       "<br><strong>Cases: </strong>", 
+                       round(leaf.nyt.st$cases))
+
+
+# test <- leaf.nyt[leaf.nyt$NAME == "Bronx", ]
+# nyc <- leaf.nyt[leaf.nyt$NAME == "New York City", ]
+# nyt.data[nyt.data$county == "New York City", ]
+# test$cases
+### Render map in leaflet
+map <- leaflet() %>% addTiles() %>%
+  addPolygons(data = leaf.nyt.st,
+              fillColor = "white", 
+              fillOpacity = 0., 
+              color = "#BDBDC3", 
+              weight = 1, group = "County") %>%
+  
+  addPolygons(data = leaf.nyt,
+              fillColor = ~pal(log(cases+1)), 
+              fillOpacity = 0.8, 
+              color = "#BDBDC3", 
+              weight = 1,
+              popup = popup_dat, group = "County") %>%
+  
+    addPolygons(data = leaf.nyt.st,
+              fillColor = "white", 
+              fillOpacity = 0., 
+              color = "#BDBDC3", 
+              weight = 1, group = "County 100") %>%
+  
+  addPolygons(data = leaf.nyt,
+              fillColor = ~pal(log(cases100k+1)), 
+              fillOpacity = 0.8, 
+              color = "#BDBDC3", 
+              weight = 1,
+              popup = popup_dat, group = "County 100") %>%
+  
+  addPolygons(data = leaf.nyt.st,
+              fillColor = ~pal.st(log(cases+1)), 
+              fillOpacity = 0.8, 
+              color = "#BDBDC3",
+              popup = popup_dat_st,
+              weight = 1, group = "State") %>%
+  
+  # Layers control
+  addLayersControl(
+    # baseGroups = c("OSM (default)", "Toner", "Toner Lite"),
+    baseGroups = c("State", "County", "County 100"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+
+toWebGL(map)
+```
