@@ -1,0 +1,67 @@
+---
+title: "COVID-19 in US counties"
+author: "Alexandre Gouy"
+date: "04/29/2020"
+output: 
+  # html_document
+  rmdformats::readthedown:
+    code_folding: hide
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+The first official case of **COVID-19** in the USA has been confirmed on the 21st of January. About three months later, almost 1 million cases have been discovered. In this context of this pandemic, it is of utmost importance to understand how the pandemic evolves by reporting data in a clear an insgihtful way.
+
+This project has **two main goals**:
+
+* **visualize different COVID-related metrics**: infection rate / 100k individuals, total cases, and total deaths at the county level (by representing maps and time series)
+
+* **identify counties with potential errors in official counts**: it has been shown that some counties negative counts in cumulative cases, which is not possible.
+
+Notes about the report: 
+
+* R code used to generate this report is provided. You just need to click on the "Code" button on the right to display the code used in a given section.
+
+* Most graphs and tables are interactive: you can zoom in and out, click on elements to display more content, or search for specific data points.
+
+# Data preparation
+
+## Dependencies and input files
+
+We first need to load R packages (mostly used for interactive visualizations).
+
+Then we set the location of input files used in this project:
+
+* a web scraped data file (april15.csv) containing COVID data for a single time-point
+
+* official population counts in US counties (census), directly taken from the web
+
+* the New-York Times COVID-19 data, taken from the web
+
+* official counties borders to be displayed on the map (downloaded from census.gov)
+
+```{r dep, results = 'hide'}
+## R packages to have installed
+library(rgdal)
+library(dplyr)
+library(leaflet)
+library(scales)
+library(dygraphs)
+library(crosstalk)
+library(plotly)
+
+## Local paths or URLs to files
+
+
+```
+
+
+

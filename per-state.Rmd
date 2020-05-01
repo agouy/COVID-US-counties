@@ -1,0 +1,7 @@
+### North Carolina
+
+```{r North Carolina}
+plotStatev3(nyt.data, 'North Carolina')
+```
+
+
